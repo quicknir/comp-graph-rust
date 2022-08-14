@@ -3,7 +3,9 @@
 pub mod compute_graph {
 
 use std::collections::HashMap;
+use std::mem;
 use std::ptr;
+use std::any::Any;
 use std::ops::{Deref, DerefMut};
 
 
@@ -43,7 +45,7 @@ impl<T> Deref for Input<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        assert!(self.data != ptr::null());
+        assert!(self.data != ptr::null(), "This should be impossible");
         unsafe {
             &*self.data
         }
@@ -57,9 +59,26 @@ impl<T> Default for Input<T> {
     }
 }
 
+trait InputSetter {
+    fn set(&mut self, target: & Box<dyn Any>);
+}
+
+impl<T: 'static> InputSetter for * mut Input<T> {
+    fn set(&mut self, target: & Box<dyn Any>) {
+        match target.downcast_ref::<* const T>() {
+            None => { assert!(false, "Input type and output type mismatc") }
+            Some(t) => {
+                unsafe {
+                    (**self).data = *t;
+                }
+            }
+        }
+    }
+}
+
 pub struct NodeAttributes {
-    inputs: HashMap<String, * mut Input<f64>>,
-    outputs: HashMap<String, * const f64>,
+    inputs: HashMap<String, Box<dyn InputSetter>>,
+    outputs: HashMap<String, Box<dyn Any>>,
 }
 
 impl NodeAttributes {
@@ -67,12 +86,12 @@ impl NodeAttributes {
         NodeAttributes{inputs: HashMap::new(), outputs: HashMap::new() }
     }
 
-    pub fn add_input(&mut self, name: String, input: &mut Input<f64>) {
-        self.inputs.insert(name, input as * mut Input<f64>);
+    pub fn add_input<T: 'static>(&mut self, name: String, input: &mut Input<T>) {
+        self.inputs.insert(name, Box::new(input as * mut Input<T>));
     }
 
-    pub fn add_output(&mut self, name: String, output: & Output<f64>) {
-        self.outputs.insert(name, &output.data as * const f64);
+    pub fn add_output<T: 'static>(&mut self, name: String, output: & Output<T>) {
+        self.outputs.insert(name, Box::new(&output.data as * const T));
     }
 }
 
@@ -84,8 +103,8 @@ pub struct DeclaredNode {
 
 pub struct GraphBuilder {
     nodes: Vec::<Box<dyn ComputationalNode>>,
-    inputs: HashMap<String, * mut Input<f64>>,
-    outputs: HashMap<String, * const f64>,
+    inputs: HashMap<String, Vec::<Box<dyn InputSetter>>>,
+    outputs: HashMap<String, Box<dyn Any>>,
 }
 
 pub struct Graph {
@@ -99,18 +118,21 @@ impl GraphBuilder {
    }
    pub fn add(&mut self, name: String,  declared_node: DeclaredNode) {
         self.nodes.push(declared_node.node);
-        for (key, value) in & declared_node.attributes.inputs {
-            self.inputs.insert(key.clone(), *value);
+        for (key, value) in declared_node.attributes.inputs {
+            if !self.inputs.contains_key(&key) {
+                self.inputs.insert(key.clone(), Vec::new());
+            }
+            self.inputs.get_mut(&key).unwrap().push(value);
         }
-        for (key, value) in & declared_node.attributes.outputs {
-            self.outputs.insert(format!("{name}.{key}"), *value);
+        for (key, value) in declared_node.attributes.outputs {
+            self.outputs.insert(format!("{name}.{key}"), value);
         }
 
    }
-   pub fn build(self) -> Graph {
-       for (key, value) in self.inputs {
-           unsafe {
-               (*value).data = *self.outputs.get(&key).unwrap();
+   pub fn build(mut self) -> Graph {
+       for (key, value) in &mut self.inputs {
+           for input_setter in value {
+               input_setter.set(self.outputs.get(key).unwrap());
            }
        }
        Graph{nodes: self.nodes}
