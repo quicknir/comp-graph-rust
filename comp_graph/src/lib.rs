@@ -1,12 +1,31 @@
 #![feature(strict_provenance)]
 
 pub mod compute_graph {
-
     use core::cell::UnsafeCell;
     use std::any::Any;
     use std::collections::HashMap;
     use std::marker::PhantomData;
     use std::ptr;
+
+    struct AliasBox<T: ?Sized> {
+        ptr: *mut T,
+        phantom: PhantomData<T>,
+    }
+
+    impl<T: ?Sized> AliasBox<T> {
+        fn new(t: Box<T>) -> AliasBox<T> {
+            AliasBox {
+                ptr: Box::into_raw(t),
+                phantom: PhantomData,
+            }
+        }
+    }
+
+    impl<T: ?Sized> Drop for AliasBox<T> {
+        fn drop(&mut self) {
+            unsafe { Box::from_raw(self.ptr) };
+        }
+    }
 
     #[derive(Default)]
     pub struct Output<T> {
@@ -47,16 +66,21 @@ pub mod compute_graph {
 
     pub unsafe trait UnsafeNode {
         fn evaluate(&mut self);
-        fn declare_attributes(&mut self, declare_info: Box<dyn Any>) -> NodeAttributes;
+        fn declare_attributes(
+            &mut self,
+            master_ptr: *mut dyn UnsafeNode,
+            declare_info: Box<dyn Any>,
+        ) -> NodeAttributes;
     }
 
     // These traits to be implemented automatically and safely by Derive macros
     pub unsafe trait OutputStruct {
-        fn declare_outputs(&self) -> OutputAttributes;
+        fn declare_outputs(&self, master_ptr: *mut dyn UnsafeNode) -> BoundOutputs;
     }
 
     pub unsafe trait InputStruct {
         fn new(_: InputMaker) -> Self;
+        fn declare_inputs(&self) -> BoundInputs;
     }
 
     // Safe trait, most users just implement this
@@ -65,13 +89,12 @@ pub mod compute_graph {
         type Inputs: InputStruct;
         type InitInfo;
 
-        fn create_outputs(&mut self, init_info: &Self::InitInfo) -> Self::Outputs;
-
-        fn initialize<'a>(
+        fn initialize(
             &mut self,
             init_info: Self::InitInfo,
-            inputs: &'a Self::Inputs,
-        ) -> InputAttributes<'a>;
+            input_atts: &mut BoundInputs,
+            outputs_atts: &mut BoundOutputs,
+        );
 
         fn evaluate(&mut self, inputs: &Self::Inputs, outputs: &mut Self::Outputs);
     }
@@ -86,15 +109,21 @@ pub mod compute_graph {
         fn evaluate(&mut self) {
             self.node.evaluate(&self.inputs, &mut self.outputs);
         }
-        fn declare_attributes(&mut self, declare_info: Box<dyn Any>) -> NodeAttributes {
-            let mut output_attrs = self.outputs.declare_outputs();
-            let input_attrs = self.node.initialize(
+        fn declare_attributes(
+            &mut self,
+            master_ptr: *mut dyn UnsafeNode,
+            declare_info: Box<dyn Any>,
+        ) -> NodeAttributes {
+            let mut bound_outputs = self.outputs.declare_outputs(master_ptr);
+            let mut bound_inputs = self.inputs.declare_inputs();
+            self.node.initialize(
                 *declare_info.downcast::<T::InitInfo>().unwrap(),
-                &self.inputs,
+                &mut bound_inputs,
+                &mut bound_outputs,
             );
             NodeAttributes {
-                inputs: input_attrs,
-                outputs: output_attrs,
+                inputs: bound_inputs.atts,
+                outputs: bound_outputs.atts,
             }
         }
     }
@@ -129,11 +158,27 @@ pub mod compute_graph {
             }
         }
 
-        pub fn add<T: 'static>(&mut self, name: String, output: &'a Output<T>) {
-            self.data
-                .insert(name, Box::new(&output.data as *const UnsafeCell<T>));
+        pub fn add<T: 'static>(
+            &mut self,
+            name: String,
+            output: &'a Output<T>,
+            master_ptr: *mut dyn UnsafeNode,
+        ) {
+            let mut input = &output.data as *const UnsafeCell<T>;
+            input = (master_ptr as *mut u8).with_addr(input.addr()).cast();
+            self.data.insert(name, Box::new(input));
+        }
+
+        pub fn bind(self) -> BoundOutputs<'a> {
+            BoundOutputs { atts: self }
         }
     }
+
+    pub struct BoundOutputs<'a> {
+        atts: OutputAttributes<'a>,
+    }
+
+    impl<'a> BoundOutputs<'a> {}
 
     pub struct InputAttributes<'a> {
         data: HashMap<String, Box<dyn InputSetter>>,
@@ -150,6 +195,20 @@ pub mod compute_graph {
         pub fn add<T: 'static>(&mut self, name: String, input: &'a Input<T>) {
             self.data.insert(name, Box::new(input as *const Input<T>));
         }
+        pub fn bind(self) -> BoundInputs<'a> {
+            BoundInputs { atts: self }
+        }
+    }
+
+    pub struct BoundInputs<'a> {
+        atts: InputAttributes<'a>,
+    }
+
+    impl<'a> BoundInputs<'a> {
+        pub fn rename(&mut self, old_name: &str, new_name: &str) {
+            let (_, input) = self.atts.data.remove_entry(old_name).unwrap();
+            self.atts.data.insert(new_name.to_string(), input);
+        }
     }
 
     pub struct NodeAttributes<'a> {
@@ -164,13 +223,13 @@ pub mod compute_graph {
 
     impl DeclaredNode {
         pub fn new<T: ComputationalNode + 'static>(
-            mut node: T,
-            mut init_info: T::InitInfo,
+            node: T,
+            init_info: T::InitInfo,
+            outputs: T::Outputs,
         ) -> DeclaredNode {
             let inputs = T::Inputs::new(InputMaker {
                 phantom: PhantomData,
             });
-            let outputs = node.create_outputs(&init_info);
             let node = Box::new(ErasedNode {
                 node,
                 inputs,
@@ -182,13 +241,13 @@ pub mod compute_graph {
     }
 
     pub struct GraphBuilder {
-        nodes: Vec<Box<dyn UnsafeNode>>,
+        nodes: Vec<AliasBox<dyn UnsafeNode>>,
         inputs: HashMap<String, Vec<Box<dyn InputSetter>>>,
         outputs: HashMap<String, Box<dyn Any>>,
     }
 
     pub struct Graph {
-        nodes: Vec<Box<dyn UnsafeNode>>,
+        nodes: Vec<AliasBox<dyn UnsafeNode>>,
     }
 
     impl GraphBuilder {
@@ -200,8 +259,9 @@ pub mod compute_graph {
             }
         }
         pub fn add(&mut self, name: &str, declared_node: DeclaredNode) {
-            let mut node = declared_node.node;
-            let attributes = node.declare_attributes(declared_node.init_info);
+            let node = AliasBox::new(declared_node.node);
+            let attributes =
+                unsafe { (*node.ptr).declare_attributes(node.ptr, declared_node.init_info) };
 
             for (key, value) in attributes.inputs.data {
                 if !self.inputs.contains_key(&key) {
@@ -228,7 +288,9 @@ pub mod compute_graph {
     impl Graph {
         pub fn evaluate(&mut self) {
             for n in &mut self.nodes {
-                n.evaluate();
+                unsafe {
+                    (*n.ptr).evaluate();
+                }
             }
         }
     }
