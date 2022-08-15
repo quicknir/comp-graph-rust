@@ -4,7 +4,6 @@ use comp_graph::compute_graph::{Output, Input, ComputationalNode, DeclaredNode, 
 
 use std::marker::PhantomData;
 
-// user code
 
 #[derive(Default)]
 struct Node1Outputs {
@@ -27,7 +26,7 @@ unsafe impl InputStruct for Node1Inputs {
     fn new(_: InputMaker) -> Self {
         Node1Inputs {}
     }
-    fn declare_inputs(&self) -> BoundInputs {
+    fn declare_inputs(&mut self) -> BoundInputs {
         InputAttributes::new().bind()
     }
 }
@@ -50,8 +49,8 @@ impl ComputationalNode for Node1 {
     }
 
     fn evaluate(&mut self, _inputs: &Self::Inputs, outputs: &mut Self::Outputs) {
-        *outputs.output1.get_mut() += 1.0;
-        *outputs.output2.get_mut() += 2.0;
+        *outputs.output1 += 1.0;
+        *outputs.output2 += 2.0;
     }
 }
 
@@ -81,9 +80,9 @@ unsafe impl<T: 'static> InputStruct for PrinterInputs<T> {
             input: Input::new(i),
         }
     }
-    fn declare_inputs(&self) -> BoundInputs {
+    fn declare_inputs(&mut self) -> BoundInputs {
         let mut input_atts = InputAttributes::new();
-        input_atts.add("input".to_string(), &self.input);
+        input_atts.add("input".to_string(), &mut self.input);
         input_atts.bind()
     }
 }
@@ -111,7 +110,7 @@ impl<T: std::fmt::Display + 'static> ComputationalNode for Printer<T> {
         println!(
             "Printing: {}, input: {}",
             self.print_prefix,
-            *inputs.input.get()
+            *inputs.input
         );
     }
 }
@@ -163,7 +162,7 @@ impl ComputationalNode for Multiplier {
     }
 
     fn evaluate(&mut self, inputs: &Self::Inputs, outputs: &mut Self::Outputs) {
-        *outputs.product.get_mut() = *inputs.input1.get() * (*inputs.input2.get());
+        *outputs.product = *inputs.input1 * *inputs.input2;
     }
 }
 
@@ -193,10 +192,10 @@ unsafe impl InputStruct for MultiplierInputs {
             input2: Input::new(i),
         }
     }
-    fn declare_inputs(&self) -> BoundInputs {
+    fn declare_inputs(&mut self) -> BoundInputs {
         let mut input_atts = InputAttributes::new();
-        input_atts.add("input1".to_string(), &self.input1);
-        input_atts.add("input2".to_string(), &self.input2);
+        input_atts.add("input1".to_string(), &mut self.input1);
+        input_atts.add("input2".to_string(), &mut self.input2);
         input_atts.bind()
     }
 }

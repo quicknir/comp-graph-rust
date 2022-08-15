@@ -1,11 +1,11 @@
 #![feature(strict_provenance)]
 
 pub mod compute_graph {
-    use core::cell::UnsafeCell;
     use std::any::Any;
     use std::collections::HashMap;
     use std::marker::PhantomData;
     use std::ptr;
+    use std::ops::{Deref, DerefMut};
 
     struct AliasBox<T: ?Sized> {
         ptr: *mut T,
@@ -29,15 +29,20 @@ pub mod compute_graph {
 
     #[derive(Default)]
     pub struct Output<T> {
-        data: UnsafeCell<T>,
+        data: T,
     }
+    
+    impl<T> Deref for Output<T> {
+        type Target = T;
 
-    impl<T> Output<T> {
-        pub fn get(&self) -> &T {
-            unsafe { &*self.data.get() }
+        fn deref(&self) -> &Self::Target {
+            &self.data
         }
-        pub fn get_mut(&mut self) -> &mut T {
-            unsafe { &mut *self.data.get() }
+    }
+    impl<T> DerefMut for Output<T> {
+
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.data
         }
     }
 
@@ -47,19 +52,21 @@ pub mod compute_graph {
     }
 
     pub struct Input<T> {
-        data: UnsafeCell<*const UnsafeCell<T>>,
+        data: *const T,
     }
+    
+    impl<T> Deref for Input<T> {
+        type Target = T;
 
-    impl<T> Input<T> {
-        pub fn get(&self) -> &T {
-            unsafe { &*(**self.data.get()).get() }
+        fn deref(&self) -> &Self::Target {
+            unsafe { &(*self.data) }
         }
     }
 
     impl<T> Input<T> {
         pub fn new(_: InputMaker) -> Input<T> {
             Input::<T> {
-                data: UnsafeCell::new(ptr::null()),
+                data: ptr::null(),
             }
         }
     }
@@ -80,7 +87,7 @@ pub mod compute_graph {
 
     pub unsafe trait InputStruct {
         fn new(_: InputMaker) -> Self;
-        fn declare_inputs(&self) -> BoundInputs;
+        fn declare_inputs(&mut self) -> BoundInputs;
     }
 
     // Safe trait, most users just implement this
@@ -129,19 +136,14 @@ pub mod compute_graph {
     }
 
     trait InputSetter {
-        fn set(&mut self, target: &Box<dyn Any>);
+        fn set(&mut self, target: &Box<dyn Any>) -> Result<(), ()>;
     }
 
-    impl<T: 'static> InputSetter for *const Input<T> {
-        fn set(&mut self, target: &Box<dyn Any>) {
-            match target.downcast_ref::<*const UnsafeCell<T>>() {
-                None => {
-                    assert!(false, "Input type and output type mismatch!")
-                }
-                Some(t) => unsafe {
-                    *(**self).data.get() = *t;
-                },
-            }
+    impl<T: 'static> InputSetter for *mut Input<T> {
+        fn set(&mut self, target: &Box<dyn Any>) -> Result<(),()> {
+            let t = target.downcast_ref::<*const T>().ok_or(())?;
+            unsafe { (**self).data = *t };
+            Ok(())
         }
     }
 
@@ -164,7 +166,7 @@ pub mod compute_graph {
             output: &'a Output<T>,
             master_ptr: *mut dyn UnsafeNode,
         ) {
-            let mut input = &output.data as *const UnsafeCell<T>;
+            let mut input = &output.data as *const T;
             input = (master_ptr as *mut u8).with_addr(input.addr()).cast();
             self.data.insert(name, Box::new(input));
         }
@@ -192,8 +194,8 @@ pub mod compute_graph {
                 phantom: PhantomData,
             }
         }
-        pub fn add<T: 'static>(&mut self, name: String, input: &'a Input<T>) {
-            self.data.insert(name, Box::new(input as *const Input<T>));
+        pub fn add<T: 'static>(&mut self, name: String, input: &'a mut Input<T>) {
+            self.data.insert(name, Box::new(input as *mut Input<T>));
         }
         pub fn bind(self) -> BoundInputs<'a> {
             BoundInputs { atts: self }
@@ -278,7 +280,10 @@ pub mod compute_graph {
         pub fn build(mut self) -> Graph {
             for (key, value) in &mut self.inputs {
                 for input_setter in value {
-                    input_setter.set(self.outputs.get(key).unwrap());
+                    let output_lookup = self.outputs.get(key);
+                    assert!(output_lookup.is_some(), "Error, no output for input {}", key);
+                    let result = input_setter.set(output_lookup.unwrap());
+                    assert!(result.is_ok(), "Error, input and output types mismatch at {}", key);
                 }
             }
             Graph { nodes: self.nodes }
