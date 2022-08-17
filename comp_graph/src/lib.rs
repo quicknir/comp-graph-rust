@@ -127,20 +127,20 @@ pub mod compute_graph {
         }
     }
 
-    trait InputSetter {
-        fn set(&mut self, target: &Box<dyn Any>) -> Result<(), ()>;
+    trait InputSetter: 'static {
+        fn set(&mut self, target: *const dyn Any) -> Result<(), ()>;
     }
 
-    impl<T: 'static> InputSetter for *mut Input<T> {
-        fn set(&mut self, target: &Box<dyn Any>) -> Result<(), ()> {
-            let t = target.downcast_ref::<*const T>().ok_or(())?;
-            unsafe { (**self).data = *t };
+    impl<T: 'static> InputSetter for Input<T> {
+        fn set(&mut self, target: *const dyn Any) -> Result<(), ()> {
+            unsafe { &*target }.is::<T>().then_some(()).ok_or(())?;
+            self.data = target.cast();
             Ok(())
         }
     }
 
     pub struct OutputAttributes<'a> {
-        data: HashMap<String, Box<dyn Any>>,
+        data: HashMap<String, *mut dyn Any>,
         phantom: PhantomData<&'a dyn Any>,
         master_ptr: *mut u8,
     }
@@ -154,13 +154,13 @@ pub mod compute_graph {
             }
         }
 
-        pub fn add<T: 'static>(&mut self, name: &str, output: &'a Output<T>) {
-            let mut input = &output.data as *const T;
-            input = self.master_ptr.with_addr(input.addr()).cast();
-            self.data.insert(name.to_string(), Box::new(input));
+        pub fn add<T: Any + 'static>(&mut self, name: &str, output: &'a Output<T>) {
+            let input: *const T = &output.data;
+            let input: *mut T = self.master_ptr.with_addr(input.addr()).cast();
+            self.data.insert(name.to_string(), input);
         }
 
-        pub fn bind<'b>(&'b mut self) -> BoundOutputs<'a, 'b> {
+        pub fn bind(&mut self) -> BoundOutputs<'a, '_> {
             BoundOutputs { atts: self }
         }
     }
@@ -169,7 +169,7 @@ pub mod compute_graph {
         atts: &'b mut OutputAttributes<'a>,
     }
 
-    impl<'a, 'b> BoundOutputs<'a, 'b> {
+    impl BoundOutputs<'_, '_> {
         pub fn rename(&mut self, old_name: &str, new_name: &str) {
             let (_, input) = self.atts.data.remove_entry(old_name).unwrap();
             self.atts.data.insert(new_name.to_string(), input);
@@ -177,19 +177,19 @@ pub mod compute_graph {
     }
 
     pub struct InputAttributes<'a> {
-        data: HashMap<String, Box<dyn InputSetter>>,
+        data: HashMap<String, &'a mut dyn InputSetter>,
         phantom: PhantomData<&'a dyn Any>,
     }
 
     impl<'a> InputAttributes<'a> {
-        pub fn new() -> InputAttributes<'static> {
+        pub fn new() -> Self {
             InputAttributes {
                 data: HashMap::new(),
                 phantom: PhantomData,
             }
         }
         pub fn add<T: 'static>(&mut self, name: &str, input: &'a mut Input<T>) {
-            self.data.insert(name.to_string(), Box::new(input as *mut Input<T>));
+            self.data.insert(name.to_string(), input);
         }
         pub fn bind<'b>(&'b mut self) -> BoundInputs<'a, 'b> {
             BoundInputs { atts: self }
@@ -200,7 +200,7 @@ pub mod compute_graph {
         atts: &'b mut InputAttributes<'a>,
     }
 
-    impl<'a, 'b> BoundInputs<'a, 'b> {
+    impl BoundInputs<'_, '_> {
         pub fn rename(&mut self, old_name: &str, new_name: &str) {
             let (_, input) = self.atts.data.remove_entry(old_name).unwrap();
             self.atts.data.insert(new_name.to_string(), input);
@@ -238,8 +238,8 @@ pub mod compute_graph {
 
     pub struct GraphBuilder {
         nodes: Vec<AliasBox<dyn UnsafeNode>>,
-        inputs: HashMap<String, Vec<Box<dyn InputSetter>>>,
-        outputs: HashMap<String, Box<dyn Any>>,
+        inputs: HashMap<String, Vec<*mut dyn InputSetter>>,
+        outputs: HashMap<String, *const dyn Any>,
     }
 
     pub struct Graph {
@@ -273,21 +273,18 @@ pub mod compute_graph {
 
             self.nodes.push(node);
         }
-        pub fn build(mut self) -> Graph {
-            for (key, value) in &mut self.inputs {
+        pub fn build(self) -> Graph {
+            for (key, value) in self.inputs {
+                let output_lookup = *self
+                    .outputs
+                    .get(&key)
+                    .unwrap_or_else(|| panic!("Error, no output for input {}", key));
                 for input_setter in value {
-                    let output_lookup = self.outputs.get(key);
-                    assert!(
-                        output_lookup.is_some(),
-                        "Error, no output for input {}",
-                        key
-                    );
-                    let result = input_setter.set(output_lookup.unwrap());
-                    assert!(
-                        result.is_ok(),
-                        "Error, input and output types mismatch at {}",
-                        key
-                    );
+                    unsafe { &mut *input_setter }
+                        .set(output_lookup)
+                        .unwrap_or_else(|_| {
+                            panic!("Error, input and output types mismatch at {}", key)
+                        });
                 }
             }
             Graph { nodes: self.nodes }
