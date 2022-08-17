@@ -4,7 +4,6 @@ use comp_graph::compute_graph::{Output, Input, ComputationalNode, DeclaredNode, 
 
 use std::marker::PhantomData;
 
-
 #[derive(Default)]
 struct Node1Outputs {
     output1: Output<f64>,
@@ -12,11 +11,9 @@ struct Node1Outputs {
 }
 
 unsafe impl OutputStruct for Node1Outputs {
-    fn declare_outputs(&self, master_ptr: *mut dyn UnsafeNode) -> BoundOutputs {
-        let mut outputs = OutputAttributes::new();
-        outputs.add("x".to_string(), &self.output1, master_ptr);
-        outputs.add("y".to_string(), &self.output2, master_ptr);
-        outputs.bind()
+    fn declare_outputs<'a>(&'a self, outputs: &mut OutputAttributes<'a>) {
+        outputs.add("x", &self.output1);
+        outputs.add("y", &self.output2);
     }
 }
 
@@ -26,9 +23,7 @@ unsafe impl InputStruct for Node1Inputs {
     fn new(_: InputMaker) -> Self {
         Node1Inputs {}
     }
-    fn declare_inputs(&mut self) -> BoundInputs {
-        InputAttributes::new().bind()
-    }
+    fn declare_inputs<'a>(&'a mut self, _inputs: &mut InputAttributes<'a>) {}
 }
 
 struct Node1InitInfo;
@@ -43,8 +38,8 @@ impl ComputationalNode for Node1 {
     fn initialize(
         &mut self,
         _init_info: Self::InitInfo,
-        _bound_inputs: &mut BoundInputs,
-        _bound_outputs: &mut BoundOutputs,
+        _bound_inputs: BoundInputs,
+        _bound_outputs: BoundOutputs,
     ) {
     }
 
@@ -61,9 +56,7 @@ fn make_node1() -> DeclaredNode {
 struct PrinterOutputs;
 
 unsafe impl OutputStruct for PrinterOutputs {
-    fn declare_outputs(&self, _master_ptr: *mut dyn UnsafeNode) -> BoundOutputs {
-        OutputAttributes::new().bind()
-    }
+    fn declare_outputs<'a>(&'a self, _outputs: &'a mut OutputAttributes) {}
 }
 
 struct PrinterInitInfo {
@@ -80,10 +73,8 @@ unsafe impl<T: 'static> InputStruct for PrinterInputs<T> {
             input: Input::new(i),
         }
     }
-    fn declare_inputs(&mut self) -> BoundInputs {
-        let mut input_atts = InputAttributes::new();
-        input_atts.add("input".to_string(), &mut self.input);
-        input_atts.bind()
+    fn declare_inputs<'a>(&'a mut self, inputs: &mut InputAttributes<'a>) {
+        inputs.add("input", &mut self.input);
     }
 }
 
@@ -100,18 +91,14 @@ impl<T: std::fmt::Display + 'static> ComputationalNode for Printer<T> {
     fn initialize(
         &mut self,
         init_info: Self::InitInfo,
-        bound_inputs: &mut BoundInputs,
-        _bound_outputs: &mut BoundOutputs,
+        mut bound_inputs: BoundInputs,
+        _bound_outputs: BoundOutputs,
     ) {
         bound_inputs.rename("input", &init_info.input_name);
     }
 
     fn evaluate(&mut self, inputs: &Self::Inputs, _outputs: &mut Self::Outputs) {
-        println!(
-            "Printing: {}, input: {}",
-            self.print_prefix,
-            *inputs.input
-        );
+        println!("Printing: {}, input: {}", self.print_prefix, *inputs.input);
     }
 }
 
@@ -154,8 +141,8 @@ impl ComputationalNode for Multiplier {
     fn initialize(
         &mut self,
         init_info: Self::InitInfo,
-        bound_inputs: &mut BoundInputs,
-        _bound_outputs: &mut BoundOutputs,
+        mut bound_inputs: BoundInputs,
+        _bound_outputs: BoundOutputs,
     ) {
         bound_inputs.rename("input1", &init_info.input1_name);
         bound_inputs.rename("input2", &init_info.input2_name);
@@ -178,10 +165,8 @@ fn make_multiplier(input1_name: String, input2_name: String) -> DeclaredNode {
 }
 
 unsafe impl OutputStruct for MultiplierOutputs {
-    fn declare_outputs(&self, master_ptr: *mut dyn UnsafeNode) -> BoundOutputs {
-        let mut out_atts = OutputAttributes::new();
-        out_atts.add("product".to_string(), &self.product, master_ptr);
-        out_atts.bind()
+    fn declare_outputs<'a>(&'a self, outputs: &mut OutputAttributes<'a>) {
+        outputs.add("product", &self.product);
     }
 }
 
@@ -192,11 +177,9 @@ unsafe impl InputStruct for MultiplierInputs {
             input2: Input::new(i),
         }
     }
-    fn declare_inputs(&mut self) -> BoundInputs {
-        let mut input_atts = InputAttributes::new();
-        input_atts.add("input1".to_string(), &mut self.input1);
-        input_atts.add("input2".to_string(), &mut self.input2);
-        input_atts.bind()
+    fn declare_inputs<'a>(&'a mut self, inputs: &mut InputAttributes<'a>) {
+        inputs.add("input1", &mut self.input1);
+        inputs.add("input2", &mut self.input2);
     }
 }
 
