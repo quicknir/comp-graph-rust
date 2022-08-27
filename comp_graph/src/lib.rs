@@ -1,14 +1,13 @@
 #![feature(strict_provenance)]
 
 pub mod compute_graph {
-    use core::mem::MaybeUninit;
     use std::any::Any;
     use std::collections::HashMap;
     use std::marker::PhantomData;
     use std::ops::{Deref, DerefMut};
     use std::ptr;
 
-    pub struct AliasBox<T: ?Sized> {
+    struct AliasBox<T: ?Sized> {
         ptr: *mut T,
         phantom: PhantomData<T>,
     }
@@ -70,61 +69,61 @@ pub mod compute_graph {
     }
     pub unsafe trait UnsafeNode {
         fn evaluate(&mut self);
+        fn declare_attributes<'a>(
+            &'a mut self,
+            declare_info: Box<dyn Any>,
+            node_attributes: &mut NodeAttributes<'a>,
+        );
     }
 
-    // This trait to be implemented via macro
-    pub unsafe trait AttributeStruct {
+    // These traits to be implemented automatically and safely by Derive macros
+    pub unsafe trait OutputStruct {
+        fn declare_outputs<'a>(&'a self, outputs: &mut OutputAttributes<'a>);
+    }
+
+    pub unsafe trait InputStruct {
         fn new(_: InputMaker) -> Self;
-        fn declare_attributes<'a>(&'a mut self, atts: &mut NodeAttributes<'a>);
+        fn declare_inputs<'a>(&'a mut self, inputs: &mut InputAttributes<'a>);
     }
 
     // Safe trait, most users just implement this
     pub trait ComputationalNode {
-        type Attributes: AttributeStruct;
+        type Outputs: OutputStruct;
+        type Inputs: InputStruct;
         type InitInfo;
 
-        fn new(
+        fn initialize(
+            &mut self,
             init_info: Self::InitInfo,
-            bound_attrs: BoundAttributes,
-            attrs: &mut Self::Attributes,
-        ) -> Self;
+            input_atts: BoundInputs,
+            outputs_atts: BoundOutputs,
+        );
 
-        fn evaluate(&mut self, attrs: &mut Self::Attributes);
+        fn evaluate(&mut self, inputs: &Self::Inputs, outputs: &mut Self::Outputs);
     }
 
     pub struct ErasedNode<T: ComputationalNode + 'static> {
-        attrs: T::Attributes,
-        node: MaybeUninit<T>,
+        node: T,
+        inputs: T::Inputs,
+        outputs: T::Outputs,
     }
 
     unsafe impl<T: ComputationalNode + 'static> UnsafeNode for ErasedNode<T> {
         fn evaluate(&mut self) {
-            unsafe { &mut *self.node.as_mut_ptr() }.evaluate(&mut self.attrs);
+            self.node.evaluate(&self.inputs, &mut self.outputs);
         }
-    }
-
-    impl<T: ComputationalNode + 'static> Drop for ErasedNode<T> {
-        fn drop(&mut self) {
-            unsafe { self.node.assume_init_drop() };
-        }
-    }
-
-    pub fn declare_node<T: ComputationalNode + 'static>(init_info: T::InitInfo) -> DeclaredNode {
-        let e = ErasedNode::<T> {
-            attrs: T::Attributes::new(InputMaker {
-                phantom: PhantomData,
-            }),
-            node: MaybeUninit::uninit(),
-        };
-        let p = Box::into_raw(Box::new(e));
-        let mut attrs = NodeAttributes::new(p);
-        unsafe {&mut *p} .attrs.declare_attributes(&mut attrs);
-        let bound_attrs = attrs.bind();
-        unsafe {
-            (*p).node = MaybeUninit::new(T::new(init_info, bound_attrs, &mut (*p).attrs));
-            DeclaredNode::new (
-                AliasBox::new(Box::from_raw(p)),
-                attrs)
+        fn declare_attributes<'a>(
+            &'a mut self,
+            declare_info: Box<dyn Any>,
+            node_attributes: &mut NodeAttributes<'a>,
+        ) {
+            self.inputs.declare_inputs(&mut node_attributes.inputs);
+            self.outputs.declare_outputs(&mut node_attributes.outputs);
+            self.node.initialize(
+                *declare_info.downcast::<T::InitInfo>().unwrap(),
+                node_attributes.inputs.bind(),
+                node_attributes.outputs.bind(),
+            );
         }
     }
 
@@ -140,68 +139,100 @@ pub mod compute_graph {
         }
     }
 
-    pub struct BoundAttributes<'a, 'b> {
-        atts: &'b mut NodeAttributes<'a>,
-    }
-    impl BoundAttributes<'_, '_> {
-        pub fn rename_input(&mut self, old_name: &str, new_name: &str) {
-            let (_, input) = self.atts.inputs.remove_entry(old_name).unwrap();
-            self.atts.inputs.insert(new_name.to_string(), input);
-        }
-        pub fn rename_output(&mut self, old_name: &str, new_name: &str) {
-            let (_, input) = self.atts.outputs.remove_entry(old_name).unwrap();
-            self.atts.outputs.insert(new_name.to_string(), input);
-        }
-    }
-
-    pub struct NodeAttributes<'a> {
-        inputs: HashMap<String, *mut dyn InputSetter>,
-        outputs: HashMap<String, *mut dyn Any>,
+    pub struct OutputAttributes<'a> {
+        data: HashMap<String, *mut dyn Any>,
         phantom: PhantomData<&'a dyn Any>,
         master_ptr: *mut u8,
     }
 
-    impl<'a> NodeAttributes<'a> {
-        pub fn new(master_ptr: *mut dyn UnsafeNode) -> Self {
-            NodeAttributes { 
-                inputs: HashMap::new(),
-                outputs: HashMap::new(),
+    impl<'a> OutputAttributes<'a> {
+        pub fn new(master_ptr: *mut dyn UnsafeNode) -> OutputAttributes<'static> {
+            OutputAttributes {
+                data: HashMap::new(),
                 phantom: PhantomData,
-                master_ptr: master_ptr.cast(),
+                master_ptr: master_ptr as *mut u8,
             }
         }
-        pub fn add_input<T: 'static>(&mut self, name: &str, input: &'a mut Input<T>) {
-            let mut input_ptr: *mut Input<T> = input;
-            input_ptr = self.master_ptr.with_addr(input_ptr.addr()).cast();
-            self.inputs.insert(name.to_string(), input_ptr);
-        }
-        pub fn add_output<T: Any + 'static>(&mut self, name: &str, output: &'a Output<T>) {
-            let output_ptr: *const T = &output.data;
-            let output_ptr: *mut T = self.master_ptr.with_addr(output_ptr.addr()).cast();
-            self.outputs.insert(name.to_string(), output_ptr);
+
+        pub fn add<T: Any + 'static>(&mut self, name: &str, output: &'a Output<T>) {
+            let input: *const T = &output.data;
+            let input: *mut T = self.master_ptr.with_addr(input.addr()).cast();
+            self.data.insert(name.to_string(), input);
         }
 
-        pub fn bind<'b>(&'b mut self) -> BoundAttributes<'a, 'b> {
-            BoundAttributes { atts: self }
+        pub fn bind(&mut self) -> BoundOutputs<'a, '_> {
+            BoundOutputs { atts: self }
         }
+    }
+
+    pub struct BoundOutputs<'a, 'b> {
+        atts: &'b mut OutputAttributes<'a>,
+    }
+
+    impl BoundOutputs<'_, '_> {
+        pub fn rename(&mut self, old_name: &str, new_name: &str) {
+            let (_, input) = self.atts.data.remove_entry(old_name).unwrap();
+            self.atts.data.insert(new_name.to_string(), input);
+        }
+    }
+
+    pub struct InputAttributes<'a> {
+        data: HashMap<String, &'a mut dyn InputSetter>,
+        phantom: PhantomData<&'a dyn Any>,
+    }
+
+    impl<'a> InputAttributes<'a> {
+        pub fn new() -> Self {
+            InputAttributes {
+                data: HashMap::new(),
+                phantom: PhantomData,
+            }
+        }
+        pub fn add<T: 'static>(&mut self, name: &str, input: &'a mut Input<T>) {
+            self.data.insert(name.to_string(), input);
+        }
+        pub fn bind<'b>(&'b mut self) -> BoundInputs<'a, 'b> {
+            BoundInputs { atts: self }
+        }
+    }
+
+    pub struct BoundInputs<'a, 'b> {
+        atts: &'b mut InputAttributes<'a>,
+    }
+
+    impl BoundInputs<'_, '_> {
+        pub fn rename(&mut self, old_name: &str, new_name: &str) {
+            let (_, input) = self.atts.data.remove_entry(old_name).unwrap();
+            self.atts.data.insert(new_name.to_string(), input);
+        }
+    }
+
+    pub struct NodeAttributes<'a> {
+        pub inputs: InputAttributes<'a>,
+        pub outputs: OutputAttributes<'a>,
     }
 
     pub struct DeclaredNode {
-        node: AliasBox<dyn UnsafeNode + 'static>,
-        inputs: HashMap<String, *mut dyn InputSetter>,
-        outputs: HashMap<String, *mut dyn Any>,
+        node: Box<dyn UnsafeNode + 'static>,
+        init_info: Box<dyn Any>,
     }
 
     impl DeclaredNode {
-        pub unsafe fn new(
-            node: AliasBox<dyn UnsafeNode + 'static>,
-            attrs: NodeAttributes,
+        pub fn new<T: ComputationalNode + 'static>(
+            node: T,
+            init_info: T::InitInfo,
+            outputs: T::Outputs,
         ) -> DeclaredNode {
-            DeclaredNode {
+            let inputs = T::Inputs::new(InputMaker {
+                phantom: PhantomData,
+            });
+            let node = Box::new(ErasedNode {
                 node,
-                inputs: attrs.inputs,
-                outputs: attrs.outputs,
-            }
+                inputs,
+                outputs,
+            });
+            let init_info = Box::new(init_info);
+            DeclaredNode { node, init_info }
         }
     }
 
@@ -224,17 +255,23 @@ pub mod compute_graph {
             }
         }
         pub fn add(&mut self, name: &str, declared_node: DeclaredNode) {
-            for (key, value) in declared_node.inputs {
+            let node = AliasBox::new(declared_node.node);
+            let mut attributes = NodeAttributes {
+                inputs: InputAttributes::new(),
+                outputs: OutputAttributes::new(node.ptr),
+            };
+            unsafe { (*node.ptr).declare_attributes(declared_node.init_info, &mut attributes) };
+            for (key, value) in attributes.inputs.data {
                 if !self.inputs.contains_key(&key) {
                     self.inputs.insert(key.clone(), Vec::new());
                 }
                 self.inputs.get_mut(&key).unwrap().push(value);
             }
-            for (key, value) in declared_node.outputs {
+            for (key, value) in attributes.outputs.data {
                 self.outputs.insert(format!("{name}.{key}"), value);
             }
 
-            self.nodes.push(declared_node.node);
+            self.nodes.push(node);
         }
         pub fn build(self) -> Graph {
             for (key, value) in self.inputs {
