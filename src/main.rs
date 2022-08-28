@@ -1,4 +1,6 @@
 extern crate comp_graph;
+extern crate comp_graph_macro;
+use comp_graph_macro::{OutputStructMacro};
 use comp_graph::compute_graph::{
     Attributes, ComputationalNode, ComputationalNodeMaker, GraphBuilder, Input, InputAttributes,
     InputMaker, InputStruct, Output, OutputAttributes, OutputStruct,
@@ -150,7 +152,12 @@ unsafe impl InputStruct for MultiplierInputs {
     }
 }
 
+#[derive(OutputStructMacro)]
+struct Struct;
+
 fn main() {
+    assert_eq!(42, answer());
+
     let mut builder = GraphBuilder::new();
     builder.add("start", Node1::declare(Node1InitInfo {}));
     builder.add(

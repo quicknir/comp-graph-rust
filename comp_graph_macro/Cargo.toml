@@ -1,10 +1,12 @@
 [package]
-name = "comp-graph-rust"
+name = "comp_graph_macro"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+proc-macro = true
 
 [dependencies]
-comp_graph = { path = "comp_graph" }
-comp_graph_macro = { path = "comp_graph_macro" }
+comp_graph = { path = "../comp_graph" }
+

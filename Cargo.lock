@@ -7,8 +7,16 @@ name = "comp-graph-rust"
 version = "0.1.0"
 dependencies = [
  "comp_graph",
+ "comp_graph_macro",
 ]
 
 [[package]]
 name = "comp_graph"
 version = "0.1.0"
+
+[[package]]
+name = "comp_graph_macro"
+version = "0.1.0"
+dependencies = [
+ "comp_graph",
+]
