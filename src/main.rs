@@ -1,6 +1,6 @@
 extern crate comp_graph;
 use comp_graph::compute_graph::{
-    Attributes, ComputationalNode, DeclaredNode, GraphBuilder, Input, InputAttributes,
+    Attributes, ComputationalNode, ComputationalNodeMaker, GraphBuilder, Input, InputAttributes,
     InputMaker, InputStruct, Output, OutputAttributes, OutputStruct,
 };
 
@@ -85,7 +85,6 @@ impl<T: std::fmt::Display + 'static> ComputationalNode for Printer<T> {
 
     fn make(init_info: Self::InitInfo, attrs: &mut Attributes) -> (Self, Self::Outputs) {
         attrs.inputs.rename("input", &init_info.input_name);
-
         (
             Printer {
                 print_prefix: init_info.print_prefix,
@@ -153,22 +152,34 @@ unsafe impl InputStruct for MultiplierInputs {
 
 fn main() {
     let mut builder = GraphBuilder::new();
-    builder.add("start", DeclaredNode::new::<Node1>(Node1InitInfo{}));
+    builder.add("start", Node1::declare(Node1InitInfo {}));
     builder.add(
         "print_x",
-        DeclaredNode::new::<Printer<f64>>(PrinterInitInfo{input_name: "start.x".to_string(), print_prefix: "x".to_string()}),
+        Printer::<f64>::declare(PrinterInitInfo {
+            input_name: "start.x".to_string(),
+            print_prefix: "x".to_string(),
+        }),
     );
     builder.add(
         "print_y",
-        DeclaredNode::new::<Printer<f64>>(PrinterInitInfo{input_name: "start.y".to_string(), print_prefix: "y".to_string()}),
+        Printer::<f64>::declare(PrinterInitInfo {
+            input_name: "start.y".to_string(),
+            print_prefix: "y".to_string(),
+        }),
     );
     builder.add(
         "product",
-        DeclaredNode::new::<Multiplier>(MultiplierInitInfo{input1_name: "start.x".to_string(), input2_name: "start.y".to_string()})
+        Multiplier::declare(MultiplierInitInfo {
+            input1_name: "start.x".to_string(),
+            input2_name: "start.y".to_string(),
+        }),
     );
     builder.add(
         "print_product",
-        DeclaredNode::new::<Printer<f64>>(PrinterInitInfo{input_name: "product.product".to_string(), print_prefix: "product".to_string()}),
+        Printer::<f64>::declare(PrinterInitInfo {
+            input_name: "product.product".to_string(),
+            print_prefix: "product".to_string(),
+        }),
     );
 
     let mut graph = builder.build();
