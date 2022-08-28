@@ -1,6 +1,8 @@
 extern crate comp_graph;
-use comp_graph::compute_graph::{Output, Input, ComputationalNode, DeclaredNode, Graph, GraphBuilder, NodeAttributes,
-    InputStruct, OutputStruct, InputAttributes, OutputAttributes, InputMaker, UnsafeNode, BoundInputs, BoundOutputs};
+use comp_graph::compute_graph::{
+    Attributes, ComputationalNode, DeclaredNode, GraphBuilder, Input, InputAttributes,
+    InputMaker, InputStruct, Output, OutputAttributes, OutputStruct,
+};
 
 use std::marker::PhantomData;
 
@@ -35,22 +37,14 @@ impl ComputationalNode for Node1 {
     type Inputs = Node1Inputs;
     type InitInfo = Node1InitInfo;
 
-    fn initialize(
-        &mut self,
-        _init_info: Self::InitInfo,
-        _bound_inputs: BoundInputs,
-        _bound_outputs: BoundOutputs,
-    ) {
+    fn make(_init_info: Self::InitInfo, _attrs: &mut Attributes) -> (Self, Self::Outputs) {
+        (Node1 {}, Default::default())
     }
 
     fn evaluate(&mut self, _inputs: &Self::Inputs, outputs: &mut Self::Outputs) {
         *outputs.output1 += 1.0;
         *outputs.output2 += 2.0;
     }
-}
-
-fn make_node1() -> DeclaredNode {
-    DeclaredNode::new(Node1 {}, Node1InitInfo {}, Default::default())
 }
 
 struct PrinterOutputs;
@@ -60,6 +54,7 @@ unsafe impl OutputStruct for PrinterOutputs {
 }
 
 struct PrinterInitInfo {
+    print_prefix: String,
     input_name: String,
 }
 
@@ -88,32 +83,20 @@ impl<T: std::fmt::Display + 'static> ComputationalNode for Printer<T> {
     type Outputs = PrinterOutputs;
     type InitInfo = PrinterInitInfo;
 
-    fn initialize(
-        &mut self,
-        init_info: Self::InitInfo,
-        mut bound_inputs: BoundInputs,
-        _bound_outputs: BoundOutputs,
-    ) {
-        bound_inputs.rename("input", &init_info.input_name);
-    }
+    fn make(init_info: Self::InitInfo, attrs: &mut Attributes) -> (Self, Self::Outputs) {
+        attrs.inputs.rename("input", &init_info.input_name);
 
+        (
+            Printer {
+                print_prefix: init_info.print_prefix,
+                phantom: PhantomData,
+            },
+            PrinterOutputs {},
+        )
+    }
     fn evaluate(&mut self, inputs: &Self::Inputs, _outputs: &mut Self::Outputs) {
         println!("Printing: {}, input: {}", self.print_prefix, *inputs.input);
     }
-}
-
-fn make_printer<T: std::fmt::Display + 'static>(
-    input_name: String,
-    print_prefix: String,
-) -> DeclaredNode {
-    DeclaredNode::new(
-        Printer::<T> {
-            print_prefix,
-            phantom: PhantomData,
-        },
-        PrinterInitInfo { input_name },
-        PrinterOutputs {},
-    )
 }
 
 struct MultiplierInitInfo {
@@ -138,30 +121,15 @@ impl ComputationalNode for Multiplier {
     type Inputs = MultiplierInputs;
     type Outputs = MultiplierOutputs;
 
-    fn initialize(
-        &mut self,
-        init_info: Self::InitInfo,
-        mut bound_inputs: BoundInputs,
-        _bound_outputs: BoundOutputs,
-    ) {
-        bound_inputs.rename("input1", &init_info.input1_name);
-        bound_inputs.rename("input2", &init_info.input2_name);
+    fn make(init_info: Self::InitInfo, attrs: &mut Attributes) -> (Self, Self::Outputs) {
+        attrs.inputs.rename("input1", &init_info.input1_name);
+        attrs.inputs.rename("input2", &init_info.input2_name);
+        (Multiplier {}, Default::default())
     }
 
     fn evaluate(&mut self, inputs: &Self::Inputs, outputs: &mut Self::Outputs) {
         *outputs.product = *inputs.input1 * *inputs.input2;
     }
-}
-
-fn make_multiplier(input1_name: String, input2_name: String) -> DeclaredNode {
-    DeclaredNode::new(
-        Multiplier {},
-        MultiplierInitInfo {
-            input1_name,
-            input2_name,
-        },
-        Default::default(),
-    )
 }
 
 unsafe impl OutputStruct for MultiplierOutputs {
@@ -185,22 +153,22 @@ unsafe impl InputStruct for MultiplierInputs {
 
 fn main() {
     let mut builder = GraphBuilder::new();
-    builder.add("start", make_node1());
+    builder.add("start", DeclaredNode::new::<Node1>(Node1InitInfo{}));
     builder.add(
         "print_x",
-        make_printer::<f64>("start.x".to_string(), "x".to_string()),
+        DeclaredNode::new::<Printer<f64>>(PrinterInitInfo{input_name: "start.x".to_string(), print_prefix: "x".to_string()}),
     );
     builder.add(
         "print_y",
-        make_printer::<f64>("start.y".to_string(), "y".to_string()),
+        DeclaredNode::new::<Printer<f64>>(PrinterInitInfo{input_name: "start.y".to_string(), print_prefix: "y".to_string()}),
     );
     builder.add(
         "product",
-        make_multiplier("start.x".to_string(), "start.y".to_string()),
+        DeclaredNode::new::<Multiplier>(MultiplierInitInfo{input1_name: "start.x".to_string(), input2_name: "start.y".to_string()})
     );
     builder.add(
         "print_product",
-        make_printer::<f64>("product.product".to_string(), "product".to_string()),
+        DeclaredNode::new::<Printer<f64>>(PrinterInitInfo{input_name: "product.product".to_string(), print_prefix: "product".to_string()}),
     );
 
     let mut graph = builder.build();
