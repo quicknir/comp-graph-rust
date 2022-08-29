@@ -4,17 +4,17 @@ extern crate comp_graph_macro;
 use comp_graph::compute_graph::{
     Attributes, ComputationalNode, ComputationalNodeMaker, GraphBuilder, Input, InputMaker, Output,
 };
-use comp_graph_macro::{InputStructMacro, OutputStructMacro};
+use comp_graph_macro::{InputStruct, OutputStruct};
 
 use std::marker::PhantomData;
 
-#[derive(Default, OutputStructMacro)]
+#[derive(Default, OutputStruct)]
 struct Node1Outputs {
     x: Output<f64>,
     y: Output<f64>,
 }
 
-#[derive(InputStructMacro)]
+#[derive(InputStruct)]
 struct Node1Inputs {}
 
 struct Node1InitInfo;
@@ -36,7 +36,7 @@ impl ComputationalNode for Node1 {
     }
 }
 
-#[derive(OutputStructMacro)]
+#[derive(OutputStruct)]
 struct PrinterOutputs {}
 
 struct PrinterInitInfo {
@@ -44,7 +44,7 @@ struct PrinterInitInfo {
     input_name: String,
 }
 
-#[derive(InputStructMacro)]
+#[derive(InputStruct)]
 struct PrinterInputs<T: 'static> {
     input: Input<T>,
 }
@@ -79,12 +79,12 @@ struct MultiplierInitInfo {
     input2_name: String,
 }
 
-#[derive(Default, OutputStructMacro)]
+#[derive(Default, OutputStruct)]
 struct MultiplierOutputs {
     product: Output<f64>,
 }
 
-#[derive(InputStructMacro)]
+#[derive(InputStruct)]
 struct MultiplierInputs {
     input1: Input<f64>,
     input2: Input<f64>,

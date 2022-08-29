@@ -6,14 +6,20 @@ extern crate syn;
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
+use syn::{parse_macro_input, Data, DeriveInput, Field, Fields};
 
-#[proc_macro_derive(OutputStructMacro)]
+#[proc_macro_derive(OutputStruct)]
 pub fn output_struct_impl(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(tokens as DeriveInput);
     let name = input.ident;
 
-    let attrs = output_attrs(&input.data);
+    let attrs = token_fields(&input.data, |f| {
+        let name = &f.ident;
+        let s = f.ident.as_ref().unwrap().to_string();
+        quote_spanned! {f.span()=>
+            outputs.add(&#s, &self.#name);
+        }
+    });
 
     let output = quote! {
         unsafe impl ::comp_graph::compute_graph::OutputStruct for #name {
@@ -25,34 +31,25 @@ pub fn output_struct_impl(tokens: proc_macro::TokenStream) -> proc_macro::TokenS
     output.into()
 }
 
-fn output_attrs(data: &Data) -> TokenStream {
-    match *data {
-        Data::Struct(ref data) => match data.fields {
-            Fields::Named(ref fields) => {
-                let recurse = fields.named.iter().map(|f| {
-                    let name = &f.ident;
-                    let s = f.ident.as_ref().unwrap().to_string();
-                    quote_spanned! {f.span()=>
-                        outputs.add(&#s, &self.#name);
-                    }
-                });
-                quote! {
-                    #(#recurse)*
-                }
-            }
-            Fields::Unnamed(_) | Fields::Unit => unimplemented!(),
-        },
-        Data::Enum(_) | Data::Union(_) => unimplemented!(),
-    }
-}
-
-#[proc_macro_derive(InputStructMacro)]
+#[proc_macro_derive(InputStruct)]
 pub fn input_struct_impl(tokens: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = parse_macro_input!(tokens as DeriveInput);
     let name = input.ident;
 
-    let attrs = input_attrs(&input.data);
-    let new_attrs = input_new_attrs(&input.data);
+    let attrs = token_fields(&input.data, |f| {
+        let name = &f.ident;
+        let s = f.ident.as_ref().unwrap().to_string();
+        quote_spanned! {f.span()=>
+            inputs.add(&#s, &mut self.#name);
+        }
+    });
+
+    let new_attrs = token_fields(&input.data, |f| {
+        let name = &f.ident;
+        quote_spanned! {f.span()=>
+            #name: Input::new(input_maker),
+        }
+    });
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
@@ -71,18 +68,13 @@ pub fn input_struct_impl(tokens: proc_macro::TokenStream) -> proc_macro::TokenSt
     output.into()
 }
 
-fn input_new_attrs(data: &Data) -> TokenStream {
+fn token_fields<F: FnMut(&Field) -> TokenStream>(data: &Data, f: F) -> TokenStream {
     match *data {
         Data::Struct(ref data) => match data.fields {
             Fields::Named(ref fields) => {
-                let recurse = fields.named.iter().map(|f| {
-                    let name = &f.ident;
-                    quote_spanned! {f.span()=>
-                        #name: Input::new(input_maker),
-                    }
-                });
+                let token_it = fields.named.iter().map(f);
                 quote! {
-                    #(#recurse)*
+                    #(#token_it)*
                 }
             }
             Fields::Unnamed(_) | Fields::Unit => unimplemented!(),
@@ -90,25 +82,3 @@ fn input_new_attrs(data: &Data) -> TokenStream {
         Data::Enum(_) | Data::Union(_) => unimplemented!(),
     }
 }
-
-fn input_attrs(data: &Data) -> TokenStream {
-    match *data {
-        Data::Struct(ref data) => match data.fields {
-            Fields::Named(ref fields) => {
-                let recurse = fields.named.iter().map(|f| {
-                    let name = &f.ident;
-                    let s = f.ident.as_ref().unwrap().to_string();
-                    quote_spanned! {f.span()=>
-                        inputs.add(&#s, &mut self.#name);
-                    }
-                });
-                quote! {
-                    #(#recurse)*
-                }
-            }
-            Fields::Unnamed(_) | Fields::Unit => unimplemented!(),
-        },
-        Data::Enum(_) | Data::Union(_) => unimplemented!(),
-    }
-}
-
