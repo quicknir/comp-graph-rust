@@ -9,4 +9,7 @@ proc-macro = true
 
 [dependencies]
 comp_graph = { path = "../comp_graph" }
+proc-macro2 = "1.0.43"
+quote = "1.0.21"
+syn = "1.0.99"
 

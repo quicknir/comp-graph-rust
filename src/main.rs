@@ -1,34 +1,21 @@
 extern crate comp_graph;
 extern crate comp_graph_macro;
-use comp_graph_macro::{OutputStructMacro};
+
 use comp_graph::compute_graph::{
-    Attributes, ComputationalNode, ComputationalNodeMaker, GraphBuilder, Input, InputAttributes,
-    InputMaker, InputStruct, Output, OutputAttributes, OutputStruct,
+    Attributes, ComputationalNode, ComputationalNodeMaker, GraphBuilder, Input, InputMaker, Output,
 };
+use comp_graph_macro::{InputStructMacro, OutputStructMacro};
 
 use std::marker::PhantomData;
 
-#[derive(Default)]
+#[derive(Default, OutputStructMacro)]
 struct Node1Outputs {
-    output1: Output<f64>,
-    output2: Output<f64>,
+    x: Output<f64>,
+    y: Output<f64>,
 }
 
-unsafe impl OutputStruct for Node1Outputs {
-    fn declare_outputs<'a>(&'a self, outputs: &mut OutputAttributes<'a>) {
-        outputs.add("x", &self.output1);
-        outputs.add("y", &self.output2);
-    }
-}
-
-struct Node1Inputs;
-
-unsafe impl InputStruct for Node1Inputs {
-    fn new(_: InputMaker) -> Self {
-        Node1Inputs {}
-    }
-    fn declare_inputs<'a>(&'a mut self, _inputs: &mut InputAttributes<'a>) {}
-}
+#[derive(InputStructMacro)]
+struct Node1Inputs {}
 
 struct Node1InitInfo;
 
@@ -44,35 +31,22 @@ impl ComputationalNode for Node1 {
     }
 
     fn evaluate(&mut self, _inputs: &Self::Inputs, outputs: &mut Self::Outputs) {
-        *outputs.output1 += 1.0;
-        *outputs.output2 += 2.0;
+        *outputs.x += 1.0;
+        *outputs.y += 2.0;
     }
 }
 
-struct PrinterOutputs;
-
-unsafe impl OutputStruct for PrinterOutputs {
-    fn declare_outputs<'a>(&'a self, _outputs: &'a mut OutputAttributes) {}
-}
+#[derive(OutputStructMacro)]
+struct PrinterOutputs {}
 
 struct PrinterInitInfo {
     print_prefix: String,
     input_name: String,
 }
 
-struct PrinterInputs<T> {
+#[derive(InputStructMacro)]
+struct PrinterInputs<T: 'static> {
     input: Input<T>,
-}
-
-unsafe impl<T: 'static> InputStruct for PrinterInputs<T> {
-    fn new(i: InputMaker) -> Self {
-        PrinterInputs {
-            input: Input::new(i),
-        }
-    }
-    fn declare_inputs<'a>(&'a mut self, inputs: &mut InputAttributes<'a>) {
-        inputs.add("input", &mut self.input);
-    }
 }
 
 struct Printer<T: std::fmt::Display> {
@@ -105,11 +79,12 @@ struct MultiplierInitInfo {
     input2_name: String,
 }
 
-#[derive(Default)]
+#[derive(Default, OutputStructMacro)]
 struct MultiplierOutputs {
     product: Output<f64>,
 }
 
+#[derive(InputStructMacro)]
 struct MultiplierInputs {
     input1: Input<f64>,
     input2: Input<f64>,
@@ -133,31 +108,7 @@ impl ComputationalNode for Multiplier {
     }
 }
 
-unsafe impl OutputStruct for MultiplierOutputs {
-    fn declare_outputs<'a>(&'a self, outputs: &mut OutputAttributes<'a>) {
-        outputs.add("product", &self.product);
-    }
-}
-
-unsafe impl InputStruct for MultiplierInputs {
-    fn new(i: InputMaker) -> Self {
-        MultiplierInputs {
-            input1: Input::new(i),
-            input2: Input::new(i),
-        }
-    }
-    fn declare_inputs<'a>(&'a mut self, inputs: &mut InputAttributes<'a>) {
-        inputs.add("input1", &mut self.input1);
-        inputs.add("input2", &mut self.input2);
-    }
-}
-
-#[derive(OutputStructMacro)]
-struct Struct;
-
 fn main() {
-    assert_eq!(42, answer());
-
     let mut builder = GraphBuilder::new();
     builder.add("start", Node1::declare(Node1InitInfo {}));
     builder.add(
