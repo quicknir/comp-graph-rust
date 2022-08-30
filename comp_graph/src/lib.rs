@@ -191,7 +191,7 @@ pub mod compute_graph {
             }
         }
 
-        pub fn add<T: Any + 'static>(&mut self, name: &str, output: &'a Output<T>) {
+        pub fn add<T: 'static>(&mut self, name: &str, output: &'a Output<T>) {
             let input: *const T = &output.data;
             let input: *mut T = self.master_ptr.with_addr(input.addr()).cast();
             self.data.insert(name.to_string(), input);
@@ -264,13 +264,13 @@ pub mod compute_graph {
         fn evaluate(&mut self, inputs: &Self::Inputs, outputs: &mut Self::Outputs);
     }
 
-    pub struct ErasedNode<T: ComputationalNode + 'static> {
+    pub struct ErasedNode<T: ComputationalNode> {
         node: T,
         inputs: T::Inputs,
         outputs: T::Outputs,
     }
 
-    unsafe impl<T: ComputationalNode + 'static> UnsafeNode for ErasedNode<T> {
+    unsafe impl<T: ComputationalNode> UnsafeNode for ErasedNode<T> {
         fn evaluate(&mut self) {
             self.node.evaluate(&self.inputs, &mut self.outputs);
         }
