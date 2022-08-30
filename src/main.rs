@@ -1,12 +1,58 @@
-use serde::Deserialize;
-use serde_json::Value;
 use comp_graph::compute_graph::{
-    Attributes, ComputationalNode, ComputationalNodeMaker, GraphBuilder, Input, InputMaker, Output, DeclaredNode, Graph
+    Attributes, ComputationalNode, ComputationalNodeMaker, DeclaredNode, Graph, GraphBuilder,
+    Input, InputMaker, Output,
 };
 use comp_graph_macro::{InputStruct, OutputStruct};
+use serde::Deserialize;
+use serde_json::Value;
 
-use std::io::BufReader;
 use std::marker::PhantomData;
+
+use std::collections::HashMap;
+use std::path::Path;
+#[derive(Default)]
+struct JsonNodeFactory {
+    registry: HashMap<String, fn(Value) -> DeclaredNode>,
+}
+
+impl JsonNodeFactory {
+    fn make(&self, name: &str, v: Value) -> DeclaredNode {
+        self.registry.get(name).unwrap()(v)
+    }
+    fn new() -> Self {
+        let mut factory = JsonNodeFactory::default();
+
+        for reg_node in inventory::iter::<RegisteredNode> {
+            factory
+                .registry
+                .insert(reg_node.name.to_string(), reg_node.declarer);
+        }
+
+        factory
+    }
+}
+
+struct RegisteredNode {
+    name: &'static str,
+    declarer: fn(Value) -> DeclaredNode,
+}
+
+impl RegisteredNode {
+    const fn new<T: ComputationalNode + 'static>(name: &'static str) -> Self
+    where
+        T::InitInfo: for<'a> Deserialize<'a>,
+    {
+        RegisteredNode {
+            name,
+            declarer: |v| {
+                let init_info: T::InitInfo = serde_json::from_value(v).unwrap();
+                T::declare(init_info)
+            },
+        }
+    }
+}
+
+inventory::collect!(RegisteredNode);
 
 #[derive(Default, OutputStruct)]
 struct Node1Outputs {
@@ -17,10 +63,8 @@ struct Node1Outputs {
 #[derive(InputStruct)]
 struct Node1Inputs {}
 
-
-
 #[derive(Deserialize)]
-struct Node1InitInfo{}
+struct Node1InitInfo {}
 
 struct Node1;
 
@@ -37,6 +81,10 @@ impl ComputationalNode for Node1 {
         *outputs.x += 1.0;
         *outputs.y += 2.0;
     }
+}
+
+inventory::submit! {
+    RegisteredNode::new::<Node1>("Node1")
 }
 
 #[derive(OutputStruct)]
@@ -77,6 +125,9 @@ impl<T: std::fmt::Display + 'static> ComputationalNode for Printer<T> {
         println!("Printing: {}, input: {}", self.print_prefix, *inputs.input);
     }
 }
+inventory::submit! {
+    RegisteredNode::new::<Printer<f64>>("Printer<f64>")
+}
 
 #[derive(Deserialize)]
 struct MultiplierInitInfo {
@@ -112,31 +163,12 @@ impl ComputationalNode for Multiplier {
         *outputs.product = *inputs.input1 * *inputs.input2;
     }
 }
-
-use std::collections::HashMap;
-use std::path::Path;
-#[derive(Default)]
-struct JsonNodeFactory {
-    registry: HashMap<String, fn(Value) -> DeclaredNode>,
-}
-
-impl JsonNodeFactory {
-    fn register<T: ComputationalNode + 'static>(&mut self, name: &str) where T::InitInfo : for <'a> Deserialize<'a> {
-        self.registry.insert(name.to_string(), |v|{
-            let init_info: T::InitInfo = serde_json::from_value(v).unwrap();
-            T::declare(init_info)
-        });
-    }
-    fn make(&self, name:&str, v: Value) -> DeclaredNode {
-        self.registry.get(name).unwrap()(v)
-    }
+inventory::submit! {
+    RegisteredNode::new::<Multiplier>("Multiplier")
 }
 
 fn graph_from_json(path: &Path) -> Graph {
-    let mut node_factory = JsonNodeFactory::default();
-    node_factory.register::<Multiplier>("Multiplier");
-    node_factory.register::<Node1>("Node1");
-    node_factory.register::<Printer<f64>>("Printer<f64>");
+    let node_factory = JsonNodeFactory::new();
 
     let file = std::fs::File::open(path).unwrap();
     let reader = std::io::BufReader::new(file);
@@ -147,8 +179,18 @@ fn graph_from_json(path: &Path) -> Graph {
     let mut builder = GraphBuilder::new();
     for mut value in j.into_iter() {
         let obj_ref = value.as_object_mut().unwrap();
-        let node_type = obj_ref.remove("__type__").unwrap().as_str().unwrap().to_string();
-        let node_name = obj_ref.remove("__name__").unwrap().as_str().unwrap().to_string();
+        let node_type = obj_ref
+            .remove("__type__")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        let node_name = obj_ref
+            .remove("__name__")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
         builder.add(&node_name, node_factory.make(&node_type, value));
     }
 
