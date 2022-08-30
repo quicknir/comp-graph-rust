@@ -1,11 +1,11 @@
-extern crate comp_graph;
-extern crate comp_graph_macro;
-
+use serde::Deserialize;
+use serde_json::Value;
 use comp_graph::compute_graph::{
-    Attributes, ComputationalNode, ComputationalNodeMaker, GraphBuilder, Input, InputMaker, Output,
+    Attributes, ComputationalNode, ComputationalNodeMaker, GraphBuilder, Input, InputMaker, Output, DeclaredNode, Graph
 };
 use comp_graph_macro::{InputStruct, OutputStruct};
 
+use std::io::BufReader;
 use std::marker::PhantomData;
 
 #[derive(Default, OutputStruct)]
@@ -17,7 +17,10 @@ struct Node1Outputs {
 #[derive(InputStruct)]
 struct Node1Inputs {}
 
-struct Node1InitInfo;
+
+
+#[derive(Deserialize)]
+struct Node1InitInfo{}
 
 struct Node1;
 
@@ -39,6 +42,7 @@ impl ComputationalNode for Node1 {
 #[derive(OutputStruct)]
 struct PrinterOutputs {}
 
+#[derive(Deserialize)]
 struct PrinterInitInfo {
     print_prefix: String,
     input_name: String,
@@ -74,6 +78,7 @@ impl<T: std::fmt::Display + 'static> ComputationalNode for Printer<T> {
     }
 }
 
+#[derive(Deserialize)]
 struct MultiplierInitInfo {
     input1_name: String,
     input2_name: String,
@@ -108,7 +113,49 @@ impl ComputationalNode for Multiplier {
     }
 }
 
-fn main() {
+use std::collections::HashMap;
+use std::path::Path;
+#[derive(Default)]
+struct JsonNodeFactory {
+    registry: HashMap<String, fn(Value) -> DeclaredNode>,
+}
+
+impl JsonNodeFactory {
+    fn register<T: ComputationalNode + 'static>(&mut self, name: &str) where T::InitInfo : for <'a> Deserialize<'a> {
+        self.registry.insert(name.to_string(), |v|{
+            let init_info: T::InitInfo = serde_json::from_value(v).unwrap();
+            T::declare(init_info)
+        });
+    }
+    fn make(&self, name:&str, v: Value) -> DeclaredNode {
+        self.registry.get(name).unwrap()(v)
+    }
+}
+
+fn graph_from_json(path: &Path) -> Graph {
+    let mut node_factory = JsonNodeFactory::default();
+    node_factory.register::<Multiplier>("Multiplier");
+    node_factory.register::<Node1>("Node1");
+    node_factory.register::<Printer<f64>>("Printer<f64>");
+
+    let file = std::fs::File::open(path).unwrap();
+    let reader = std::io::BufReader::new(file);
+
+    // Read the JSON contents of the file as an instance of `User`.
+    let j: Vec<Value> = serde_json::from_reader(reader).unwrap();
+
+    let mut builder = GraphBuilder::new();
+    for mut value in j.into_iter() {
+        let obj_ref = value.as_object_mut().unwrap();
+        let node_type = obj_ref.remove("__type__").unwrap().as_str().unwrap().to_string();
+        let node_name = obj_ref.remove("__name__").unwrap().as_str().unwrap().to_string();
+        builder.add(&node_name, node_factory.make(&node_type, value));
+    }
+
+    builder.build()
+}
+
+fn graph_from_code() -> Graph {
     let mut builder = GraphBuilder::new();
     builder.add("start", Node1::declare(Node1InitInfo {}));
     builder.add(
@@ -140,7 +187,13 @@ fn main() {
         }),
     );
 
-    let mut graph = builder.build();
+    builder.build()
+}
+
+
+fn main() {
+    let mut graph = graph_from_code();
+
     graph.evaluate();
     graph.evaluate();
     graph.evaluate();
